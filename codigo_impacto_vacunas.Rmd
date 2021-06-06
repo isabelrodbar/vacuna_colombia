@@ -1,0 +1,213 @@
+---
+title: "Impacto poblacional de la vacunación contra SARS-CoV-2 en Colombia"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    df_print: paged
+---
+
+*Este es un intento preliminar de cuantificar el impacto que la vacunación está teniendo a nivel poblacional en Colombia, usando los datos que están disponibles públicamente en la página del INS [acá](https://www.ins.gov.co/Noticias/Paginas/Coronavirus.aspx).
+Aclaro que este es un análisis preliminar y no ha sido revisado formalmente por pares. Bienvenidas sugerencias!*
+
+```{r, include=FALSE}
+
+### Preparar datos
+library(tidyr)
+library(RColorBrewer)
+library(MASS)
+
+#dat1<-read.csv("~/Downloads/Casos_positivos_de_COVID-19_en_Colombia junio 3.csv")
+#dat1$grupo_edad<-cut(dat1$Edad, c(0, 10, 40, 50, 60, 70, 80, 120))
+#dat1$dat_sin<-as.Date(gsub(" 0:00:00", "", dat1$Fecha.de.inicio.de.síntomas), "%d/%m/%Y")
+#dat1$dat_mu<-as.Date(gsub(" 0:00:00", "", dat1$Fecha.de.muerte), "%d/%m/%Y")
+#dat1$seq.death<-cut(dat1$dat_mu, seq.Date(as.Date("2020-02-01"), as.Date("2021-06-10"), by="week"))
+#dat1$seq.sym<-cut(dat1$dat_sin, seq.Date(as.Date("2020-02-01"), as.Date("2021-06-10"), by="week"))
+
+##Datos muertes
+#m1<-dat1[which(dat1$Estado=="Fallecido" & dat1$dat_mu<"2021-05-31"),]
+#m1<-dat1[which(dat1$dat_sin<"2021-05-31"),]
+
+## Muertes por semana
+#tab.deaths<-table(m1$seq.death, m1$grupo_edad)
+#tab.deaths<-table(m1$seq.sym, m1$grupo_edad)
+#tab.deaths2<-as.data.frame.matrix(tab.deaths)
+#tab.deaths2$month_year<-format(as.Date(rownames(tab.deaths2)), "%Y-%m")
+#colnames(tab.deaths2)=c("age0_10", "age10_40", "age40_50", "age50_60", "age60_70", "age70_80", "age80_120", "month_year")
+
+#write_rds(tab.deaths2, file="../vacunas/tab_deaths_age.csv")
+#write_rds(tab.deaths2, file="../vacunas/tab_symp_age.rds")
+
+tab.deaths2<-readRDS("../vacunas/tab_deaths_age.csv")
+#tab.deaths2<-readRDS("../vacunas/tab_symp_age.rds")
+
+
+```
+
+
+```{r, include=F}
+## Funciones
+
+  func.dist.out3<-function(model.out, data.comp, dates.comp=rownames(tab.deaths2)) {
+    #pred_qp<-predict(model.out, newdata=data.frame(age10_40=tab.deaths2$age10_40), se.fit=T)
+    #pred.low<-exp(pred_qp$fit-1.96*pred_qp$se.fit)
+    #pred.high<-exp(pred_qp$fit+1.96*pred_qp$se.fit)
+  pred_qp<-predict(model.out, newdata=data.frame(age10_40=tab.deaths2$age10_40), se.fit=T)
+  mat.out<-matrix(nrow=length(pred_qp$fit), ncol=500) 
+    for (i in 1:500) {
+     ### Get counts
+      counts.i<-exp(rnorm(n=length(pred_qp$fit), mean=pred_qp$fit, sd = pred_qp$se.fit))
+      counts.i[which(is.na(counts.i<0))]<-0
+      pois.i<-rpois(n=length(counts.i), lambda = counts.i)
+      mat.out[,i]<-pois.i
+    }
+  
+  counts.data<-data.frame(est=exp(pred_qp$fit), low=apply(mat.out, 1, function(x) quantile(x, .025)), high=apply(mat.out, 1, function(x) quantile(x, .975)))
+  rownames(counts.data)<-dates.comp
+  
+  rel.num<-sweep(1/mat.out, 1, data.comp, FUN = "*")
+  return(list(counts=counts.data, rel=data.frame(est=data.comp/exp(pred_qp$fit), low=apply(rel.num, 1, function(x) quantile(x, .025, na.rm=T)), high=apply(rel.num, 1, function(x) quantile(x, .975, na.rm=T))), counts_raw=mat.out, ratio_raw=rel.num))
+  }
+
+
+func.plot.incid <-function(out.counts, data.counts, col.plot="red") {
+
+plot(data.counts, type="l", ylab="Muertes semanales", xlab="", xaxt="n", ylim=c(0, 2*max(data.counts)))
+points(out.counts$counts$est[1:55], col=col.plot, type="l")
+points(56:70, out.counts$counts$est[56:70], col=col.plot, type="l", lty=3)
+polygon(c(1:70, 70:1), c(out.counts$counts$high, rev(out.counts$counts$low)), col=adjustcolor(col.plot, .5), border=NA)
+abline(v=58, lty=2)
+}
+
+func.plot.rel <-function(out.counts, data.counts, col.plot="red") {
+  
+  plot(out.counts$rel$est[55:70], ylim=c(0,1.5), pch=19, cex=.8, col=col.plot, xaxt="n", ylab="Reducción relativa", xlab="Fecha")
+  abline(h=1, lty=3, col="grey")
+  for (i in 1:16) {
+    segments(i, y0=out.counts$rel$low[i+54], y1=out.counts$rel$high[i+54], col=col.plot)
+  }
+  #points(tab.deaths2$age40_50[55:70]/pred.out_all4[55:70], cex=.8, pch=19, col="grey")
+  axis(1, which(is.element(rownames(out.counts$counts)[55:70], c("2021-02-06", "2021-03-06", "2021-04-03", "2021-05-08"))), labels=c( "Mar21", "Apr21", "May21"))
+  abline(v=4,lty=3, col="blue")
+  #legend("bottomleft", legend=c("60-70 años", "40-50 años (control)"), col=c(col.plot, "grey"), pch=19, bty="n", cex=.8)
+}
+
+    
+```
+
+# Resumen de la metodología
+### El número de muertes como indicador indirecto del nivel de transmisión
+El número de muertes por COVID-19 es un indicador indirecto del nivel de transmisión de SARS-CoV-2 en una población, y en en general esta sujeto a menores sesgos que el número de casos reportados. Por este motivo, es esperable que exista una correlación entre el número de muertes  por COVID-19 en diferentes grupos de edad a lo largo del tiempo. En Colombia, esta correlación se ha mantenido desde el inicio de la pandemia, pero se ha empezado a romper en la medida en que la cobertura de vacunación ha ido aumentando en ciertos grupos de edad.
+
+
+```{r modelos, inclure=F, echo=F}
+
+mod.pre_qpois1<-glm(age80_120~log(age10_40), data=tab.deaths2[which(rownames(tab.deaths2)<"2021-03-01" & tab.deaths2$age10_40>0),], family="quasipoisson")
+mod.pre_qpois2<-glm(age70_80~log(age10_40), data=tab.deaths2[which(rownames(tab.deaths2)<"2021-03-01" & tab.deaths2$age10_40>0),], family="quasipoisson")
+mod.pre_qpois3<-glm(age60_70~log(age10_40), data=tab.deaths2[which(rownames(tab.deaths2)<"2021-03-01" & tab.deaths2$age10_40>0),], family="quasipoisson")
+mod.pre_qpois4<-glm(age50_60~log(age10_40), data=tab.deaths2[which(rownames(tab.deaths2)<"2021-03-01" & tab.deaths2$age10_40>0),], family="quasipoisson")
+mod.pre_qpois5<-glm(age40_50~log(age10_40), data=tab.deaths2[which(rownames(tab.deaths2)<"2021-03-01" & tab.deaths2$age10_40>0),], family="quasipoisson")
+```
+
+
+Estas figuras muestran exactamente eso. Por ejemplo,  el número de muertes reportadas en personas de 10-40 años está correlacionada (linearmente) con el número de muertes en personas mayores de 80 años. Esta correlación se mantuvo hasta Febrero de 2021 (puntos rosados y verdes) y empezó a cambiar cuando empezó la Etapa 1 de vacunación en (puntos morados). Lo mismo es cierto para las personas de 70-80 años y en menor grado para las de 60-70 años (a quienes empezaron a vacunar hace pocas semanas). En cambio, la correlación no ha cambiado para las personas de 40-50 años, a quienes todavía no empiezan a vacunar.
+
+```{r plots_cor, fig.width=14, fig.height=4, echo=F}
+
+cols.plot<-colorRampPalette(brewer.pal(n = 8, "PiYG"))
+cols.plot16<-cols.plot(8)
+cols.plot2<-rev(brewer.pal(n =8,  "PRGn"))
+cols16_2<-c(cols.plot16, cols.plot2)
+
+par(mfrow=c(1, 4), mar=c(4,4,4,4))
+plot(tab.deaths2$age10_40, tab.deaths2$age80_120, pch=19, col=adjustcolor(cols16_2, .8)[as.numeric(as.factor(tab.deaths2$month_year))], xlab="Muertes en 10-40 años", ylab="Muertes semanales en 80+ años", main="")
+legend("bottomright", legend=c(levels(as.factor(tab.deaths2$month_year))), pch=19, col = cols16_2, ncol=3, cex=.9, bty="n")
+lines(1:250, exp(predict(mod.pre_qpois1, newdata=data.frame(age10_40=seq(1, 250, by=1)))), col="black", lty=2)
+text(x = 30, y=800, "80+ años", cex=1.5)
+
+plot(tab.deaths2$age10_40, tab.deaths2$age70_80, pch=19, col=adjustcolor(cols16_2, .8)[as.numeric(as.factor(tab.deaths2$month_year))], xlab="Muertes en 10-40 años", ylab="Muertes semanales en 70-80 años", main="")
+legend("bottomright", legend=c(levels(as.factor(tab.deaths2$month_year))), pch=19, col = cols16_2, ncol=3, cex=.9, bty="n")
+lines(1:250, exp(predict(mod.pre_qpois2, newdata=data.frame(age10_40=seq(1, 250, by=1)))), col="black", lty=2)
+text(x = 30, y=850, "70-80 años", cex=1.5)
+
+plot(tab.deaths2$age10_40, tab.deaths2$age60_70, pch=19, col=adjustcolor(cols16_2, .8)[as.numeric(as.factor(tab.deaths2$month_year))], xlab="Muertes en 10-40 años", ylab="Muertes semanales en 60-70 años", main="")
+legend("bottomright", legend=c(levels(as.factor(tab.deaths2$month_year))), pch=19, col = cols16_2, ncol=3, cex=.9, bty="n")
+lines(1:250, exp(predict(mod.pre_qpois3, newdata=data.frame(age10_40=seq(1, 250, by=1)))), col="black", lty=2)
+text(x = 30, y=1030, "60-70 años", cex=1.5)
+
+plot(tab.deaths2$age10_40, tab.deaths2$age40_50, pch=19, col=adjustcolor(cols16_2, .8)[as.numeric(as.factor(tab.deaths2$month_year))], xlab="Muertes en 10-40 años", ylab="Muertes semanales en 40-50 años", main="")
+legend("bottomright", legend=c(levels(as.factor(tab.deaths2$month_year))), pch=19, col = cols16_2, ncol=3, cex=.9, bty="n")
+lines(1:250, exp(predict(mod.pre_qpois5, newdata=data.frame(age10_40=seq(1, 250, by=1)))), col="black", lty=2)
+text(x = 30, y=340, "40-50 años", cex=1.5)
+
+```
+
+### Modelando el número de muertes esperadas en ausencia de vacunación
+Bajo el supuesto de que esta relación no cambia sustancialmente a lo largo del tiempo, se pueden usar los datos de número de muertes en un grupo de edad que no ha sido vacunado para predecir el número de muertes que se habrían presentado en otro grupo, en ausencia de vacuna. En este caso, usé los datos de muertes semanales en personas de 10-40 años para predecir el número de muertes en los otros grupos de edad. El código para reproducir los resultados está acá.
+
+Finalmente, se puede calcular la razón entre el número de muertes predichas por el modelo y el número de muertes observadas, para estimar la reducción relativa en número de muertes. Esta es una medida del impacto poblacional de la vacuna.
+
+### Chequeos de validez
+Para verificar que el método está dando resultados mas o menos razonables se pueden mirar los estimados en grupos o períodos de tiempo donde no se espera ver reducciones:
+* Grupos de edad no vacunados o mínimamente vacunados (por ejemplo personas de 40-50 años y de 50-60 años)
+* Periodo previo al inicio de vacunación 
+
+# Resulatos hasta Mayo 31
+## Reducción relativa en número de casos
+### Población mayor de 80 años
+```{r, echo=F, warning=F, fig.width=12, fig.height=5}
+f1<-func.dist.out3(mod.pre_qpois1, data.comp = tab.deaths2$age80_120)
+par(mfrow=c(1,2))
+func.plot.incid(f1, tab.deaths2$age80_120)
+func.plot.rel(f1, tab.deaths2$age80_120)
+```
+
+### Población entre 70-80 años
+```{r, echo=F, warning=F, fig.width=12, fig.height=5}
+f2<-func.dist.out3(mod.pre_qpois2, data.comp = tab.deaths2$age70_80)
+par(mfrow=c(1,2))
+func.plot.incid(f2, tab.deaths2$age70_80, col.plot = "royalblue")
+func.plot.rel(f2, tab.deaths2$age70_80, col.plot="royalblue")
+```
+
+### Población entre 60-70 años
+```{r, echo=F, warning=F, fig.width=12, fig.height=5}
+f3<-func.dist.out3(mod.pre_qpois3, data.comp = tab.deaths2$age60_70)
+par(mfrow=c(1,2))
+func.plot.incid(f3, tab.deaths2$age60_70, col.plot="forestgreen")
+func.plot.rel(f3, tab.deaths2$age60_70, col.plot="forestgreen")
+```
+
+### Población entre 50-60 años
+```{r, echo=F, warning=F, fig.width=12, fig.height=5}
+f4<-func.dist.out3(mod.pre_qpois4, data.comp = tab.deaths2$age50_60)
+par(mfrow=c(1,2))
+func.plot.incid(f4, tab.deaths2$age50_60, col.plot = "purple")
+func.plot.rel(f4, tab.deaths2$age50_60, col.plot="purple")
+```
+
+### Población entre 40-50 años
+```{r, echo=F, warning=F, fig.width=12, fig.height=5}
+f5<-func.dist.out3(mod.pre_qpois5, data.comp = tab.deaths2$age40_50)
+par(mfrow=c(1,2))
+func.plot.incid(f5, tab.deaths2$age40_50, col.plot = "grey")
+func.plot.rel(f5, tab.deaths2$age40_50, col.plot="grey")
+```
+
+## Muertes evitadas por la vacunación
+Muertes evitadas por la vacunación hasta el 31 de Mayo de 2021
+```{r}
+
+
+
+```
+
+# Limitaciones
+-	Este método supone que el riesgo relativo de infección y muerte se ha mantenido constante entre grupos de edad y no ha cambiado desde que inició la vacunación. Si el riesgo de infección de las personas de 80+ años (relativo al riesgo promedio de las personas de 10-40 años) ha aumentado (porque su comportamiento ha cambiado, por ejemplo), estaríamos subestimando el impacto de la vacuna. Igualmente, si el riesgo de infección de las personas de 10-40 años (relativo al riesgo promedio de las personas de 10-40 años) ha aumentado, estaríamos sobreestimando le impacto de las vacunas. 
+-	Este método solo funciona siempre y cuando la cobertura de vacunación en el grupo “indicador” (en este caso en las personas de 10-40 años) sea mínima. 
+-	Este análisis preliminar es agregado a nivel nacional, así que solo refleja la reducción promedio en todo el país. Se espera que el impacto poblacional de la vacunación varíe en los diferentes municipios de acuerdo con su nivel de vacunación.
+
+
+
+
